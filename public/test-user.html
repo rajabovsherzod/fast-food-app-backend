@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User App - Test</title>
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }
+        h1 { color: #333; margin-bottom: 20px; font-size: 24px; }
+        .status { padding: 10px; background: #e3f2fd; border-radius: 4px; margin-bottom: 20px; font-size: 14px; }
+        .status.connected { background: #c8e6c9; }
+        .status.error { background: #ffcdd2; }
+        .section { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 4px; }
+        .section h2 { font-size: 16px; margin-bottom: 10px; color: #555; }
+        button { padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; width: 100%; margin-top: 10px; font-size: 14px; }
+        button:hover { background: #45a049; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        button.secondary { background: #2196F3; }
+        input { padding: 10px; width: 100%; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 10px; font-size: 14px; }
+        .food-list { display: grid; gap: 10px; margin-top: 10px; }
+        .food-item { background: #f9f9f9; padding: 15px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
+        .food-item button { width: auto; margin: 0; padding: 8px 15px; }
+        .cart { background: #fff3cd; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+        .cart-item { display: flex; justify-content: space-between; margin-bottom: 5px; }
+        .order-card { background: #f9f9f9; padding: 15px; margin-bottom: 10px; border-radius: 4px; border-left: 4px solid #4CAF50; }
+        .order-card.new { animation: highlight 1s; }
+        @keyframes highlight { from { background: #c8e6c9; } to { background: #f9f9f9; } }
+        .notification { position: fixed; top: 20px; right: 20px; background: #323232; color: white; padding: 15px 20px; border-radius: 4px; animation: slideIn 0.3s; z-index: 1000; max-width: 300px; }
+        @keyframes slideIn { from { transform: translateX(400px); } to { transform: translateX(0); } }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🍔 Fast Food - User App</h1>
+        
+        <div class="status" id="status">⏳ Ready to login</div>
+
+        <div class="section" id="loginSection">
+            <h2>🔐 Login (Telegram)</h2>
+            <input type="text" id="telegramId" placeholder="Telegram ID" value="123456789">
+            <input type="text" id="firstName" placeholder="First Name" value="Test User">
+            <input type="text" id="phoneNumber" placeholder="Phone (+998...)" value="+998901234567">
+            <button id="loginBtn">Login</button>
+        </div>
+
+        <div class="section hidden" id="menuSection">
+            <h2>🍕 Menu</h2>
+            <button id="loadMenuBtn" class="secondary">Load Menu</button>
+            <div class="food-list" id="foods"></div>
+        </div>
+
+        <div class="cart hidden" id="cart">
+            <h2>🛒 Cart</h2>
+            <div id="cartItems"></div>
+            <strong>Total: <span id="cartTotal">0</span> so'm</strong>
+            <button id="checkoutBtn">Checkout</button>
+        </div>
+
+        <div class="section hidden" id="checkoutSection">
+            <h2>📍 Delivery Info</h2>
+            <input type="text" id="address" placeholder="Delivery Address" value="Tashkent, Chilonzor">
+            <input type="tel" id="phone" placeholder="Phone Number" value="+998901234567">
+            <button id="placeOrderBtn">Place Order</button>
+        </div>
+
+        <div class="section hidden" id="ordersSection">
+            <h2>📦 My Orders</h2>
+            <button id="loadOrdersBtn" class="secondary">Refresh Orders</button>
+            <div id="orders"></div>
+        </div>
+    </div>
+
+    <script>
+        let token = localStorage.getItem('user_token');
+        let socket = null;
+        let cart = [];
+
+        // DOM Elements
+        const statusEl = document.getElementById('status');
+        const loginSection = document.getElementById('loginSection');
+        const menuSection = document.getElementById('menuSection');
+        const ordersSection = document.getElementById('ordersSection');
+        const cartEl = document.getElementById('cart');
+        const checkoutSection = document.getElementById('checkoutSection');
+
+        function showNotification(message) {
+            const notif = document.createElement('div');
+            notif.className = 'notification';
+            notif.textContent = message;
+            document.body.appendChild(notif);
+            setTimeout(() => notif.remove(), 4000);
+        }
+
+        function updateStatus(message, type = 'info') {
+            statusEl.textContent = message;
+            statusEl.className = 'status ' + type;
+        }
+
+        // Login
+        document.getElementById('loginBtn').addEventListener('click', async function() {
+            const btn = this;
+            btn.disabled = true;
+            btn.textContent = 'Logging in...';
+            
+            const loginData = {
+                telegramId: document.getElementById('telegramId').value,
+                firstName: document.getElementById('firstName').value,
+                lastName: '',
+                phoneNumber: document.getElementById('phoneNumber').value
+            };
+
+            try {
+                const response = await fetch('http://localhost:3000/api/v1/auth/telegram-login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(loginData)
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    token = data.data.accessToken;
+                    localStorage.setItem('user_token', token);
+                    showNotification('✅ Login successful!');
+                    updateStatus('✅ Logged in as ' + data.data.user.firstName, 'connected');
+                    
+                    loginSection.classList.add('hidden');
+                    menuSection.classList.remove('hidden');
+                    ordersSection.classList.remove('hidden');
+                    
+                    connectSocket();
+                    loadFoods();
+                    loadOrders();
+                } else {
+                    showNotification('❌ Login failed: ' + data.message);
+                    updateStatus('❌ Login failed', 'error');
+                    btn.disabled = false;
+                    btn.textContent = 'Login';
+                }
+            } catch (error) {
+                showNotification('❌ Error: ' + error.message);
+                updateStatus('❌ Error: ' + error.message, 'error');
+                btn.disabled = false;
+                btn.textContent = 'Login';
+            }
+        });
+
+        function connectSocket() {
+            if (!token) return;
+
+            socket = io('http://localhost:3000', {
+                auth: { token }
+            });
+
+            socket.on('connect', () => {
+                updateStatus('🔌 Connected (Real-time)', 'connected');
+            });
+
+            socket.on('order:status:changed', (order) => {
+                showNotification('🔄 Order ' + order.orderNumber + ': ' + order.status);
+                updateOrderInList(order);
+            });
+
+            socket.on('delivery:assigned', (order) => {
+                showNotification('🚚 Delivery assigned to your order!');
+            });
+
+            socket.on('delivery:location:update', (data) => {
+                showNotification('📍 Delivery location updated');
+            });
+        }
+
+        // Load Menu
+        document.getElementById('loadMenuBtn').addEventListener('click', loadFoods);
+
+        async function loadFoods() {
+            try {
+                const response = await fetch('http://localhost:3000/api/v1/foods');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const foodsDiv = document.getElementById('foods');
+                    foodsDiv.innerHTML = '';
+                    data.data.forEach(food => {
+                        const foodItem = document.createElement('div');
+                        foodItem.className = 'food-item';
+                        
+                        const imageHtml = food.image 
+                            ? `<img src="${food.image}" style="width: 60px; height: 60px; object-fit: cover; border-radius: 8px; margin-right: 10px;">`
+                            : '';
+                        
+                        foodItem.innerHTML = `
+                            <div style="display: flex; align-items: center; flex: 1;">
+                                ${imageHtml}
+                                <div>
+                                    <strong>${food.nameUz}</strong><br>
+                                    <small>${food.price} so'm</small>
+                                </div>
+                            </div>
+                            <button data-food-id="${food.id}" data-food-name="${food.nameUz}" data-food-price="${food.price}">Add</button>
+                        `;
+                        foodsDiv.appendChild(foodItem);
+                        
+                        // Add event listener to the button
+                        const btn = foodItem.querySelector('button');
+                        btn.addEventListener('click', function() {
+                            const foodId = parseInt(this.getAttribute('data-food-id'));
+                            const name = this.getAttribute('data-food-name');
+                            const price = parseFloat(this.getAttribute('data-food-price'));
+                            addToCart(foodId, name, price);
+                        });
+                    });
+                    showNotification('✅ Menu loaded: ' + data.data.length + ' items');
+                }
+            } catch (error) {
+                showNotification('❌ Error loading menu');
+            }
+        }
+
+        function addToCart(foodId, name, price) {
+            const existing = cart.find(item => item.foodId === foodId);
+            if (existing) {
+                existing.quantity++;
+            } else {
+                cart.push({ foodId, name, price: parseFloat(price), quantity: 1 });
+            }
+            updateCart();
+            showNotification('✅ Added to cart: ' + name);
+        }
+
+        function updateCart() {
+            if (cart.length === 0) {
+                cartEl.classList.add('hidden');
+                return;
+            }
+
+            cartEl.classList.remove('hidden');
+            const cartItemsDiv = document.getElementById('cartItems');
+            const cartTotalSpan = document.getElementById('cartTotal');
+
+            cartItemsDiv.innerHTML = '';
+            let total = 0;
+
+            cart.forEach(item => {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'cart-item';
+                itemDiv.innerHTML = `
+                    <span>${item.name} x${item.quantity}</span>
+                    <span>${item.price * item.quantity} so'm</span>
+                `;
+                cartItemsDiv.appendChild(itemDiv);
+                total += item.price * item.quantity;
+            });
+
+            cartTotalSpan.textContent = total.toLocaleString();
+        }
+
+        document.getElementById('checkoutBtn').addEventListener('click', function() {
+            checkoutSection.classList.remove('hidden');
+            checkoutSection.scrollIntoView({ behavior: 'smooth' });
+        });
+
+        document.getElementById('placeOrderBtn').addEventListener('click', async function() {
+            if (!token || cart.length === 0) {
+                showNotification('❌ Cart is empty');
+                return;
+            }
+
+            const btn = this;
+            btn.disabled = true;
+            btn.textContent = 'Creating order...';
+
+            const orderData = {
+                items: cart.map(item => ({
+                    foodId: item.foodId,
+                    quantity: item.quantity
+                })),
+                deliveryAddress: document.getElementById('address').value,
+                phoneNumber: document.getElementById('phone').value,
+                paymentMethod: 'cash'
+            };
+
+            try {
+                const response = await fetch('http://localhost:3000/api/v1/orders', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(orderData)
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('✅ Order created: ' + data.data.orderNumber);
+                    cart = [];
+                    updateCart();
+                    checkoutSection.classList.add('hidden');
+                    loadOrders();
+                } else {
+                    showNotification('❌ Failed to create order: ' + data.message);
+                }
+            } catch (error) {
+                showNotification('❌ Error: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Place Order';
+            }
+        });
+
+        document.getElementById('loadOrdersBtn').addEventListener('click', loadOrders);
+
+        async function loadOrders() {
+            if (!token) return;
+
+            try {
+                const response = await fetch('http://localhost:3000/api/v1/orders', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    const ordersDiv = document.getElementById('orders');
+                    ordersDiv.innerHTML = '';
+                    data.data.forEach(order => addOrderToList(order));
+                }
+            } catch (error) {
+                showNotification('❌ Error loading orders');
+            }
+        }
+
+        function addOrderToList(order, isNew = false) {
+            const ordersDiv = document.getElementById('orders');
+            const orderCard = document.createElement('div');
+            orderCard.className = 'order-card' + (isNew ? ' new' : '');
+            orderCard.id = 'order-' + order.id;
+            orderCard.innerHTML = `
+                <strong>📋 ${order.orderNumber}</strong><br>
+                Status: <span style="color: ${getStatusColor(order.status)}">${order.status}</span><br>
+                💰 ${order.totalPrice} so'm<br>
+                <small>⏰ ${new Date(order.createdAt).toLocaleString('uz-UZ')}</small>
+            `;
+            ordersDiv.insertBefore(orderCard, ordersDiv.firstChild);
+        }
+
+        function updateOrderInList(order) {
+            const orderCard = document.getElementById('order-' + order.id);
+            if (orderCard) {
+                orderCard.className = 'order-card new';
+                const statusSpan = orderCard.querySelector('span');
+                if (statusSpan) {
+                    statusSpan.textContent = order.status;
+                    statusSpan.style.color = getStatusColor(order.status);
+                }
+            }
+        }
+
+        function getStatusColor(status) {
+            const colors = {
+                pending: '#ff9800',
+                confirmed: '#2196F3',
+                preparing: '#9c27b0',
+                ready: '#4CAF50',
+                delivering: '#00bcd4',
+                delivered: '#4CAF50',
+                cancelled: '#f44336'
+            };
+            return colors[status] || '#666';
+        }
+
+        // Auto-login if token exists
+        if (token) {
+            updateStatus('✅ Token found, connecting...', 'connected');
+            loginSection.classList.add('hidden');
+            menuSection.classList.remove('hidden');
+            ordersSection.classList.remove('hidden');
+            connectSocket();
+            loadFoods();
+            loadOrders();
+        }
+    </script>
+</body>
+</html>

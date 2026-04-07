@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Test</title>
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }
+        h1 { color: #333; margin-bottom: 20px; }
+        .status { padding: 10px; background: #e3f2fd; border-radius: 4px; margin-bottom: 20px; }
+        .status.connected { background: #c8e6c9; }
+        .status.error { background: #ffcdd2; }
+        .section { margin-bottom: 30px; padding: 15px; border: 1px solid #ddd; border-radius: 4px; }
+        .section h2 { font-size: 18px; margin-bottom: 15px; color: #555; }
+        button { padding: 10px 20px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; margin-top: 5px; }
+        button:hover { background: #1976D2; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        button.danger { background: #f44336; }
+        button.success { background: #4CAF50; }
+        input { padding: 8px; margin-right: 10px; border: 1px solid #ddd; border-radius: 4px; }
+        .orders { margin-top: 20px; }
+        .order-card { background: #f9f9f9; padding: 15px; margin-bottom: 10px; border-radius: 4px; border-left: 4px solid #2196F3; }
+        .order-card.new { animation: highlight 1s; }
+        @keyframes highlight { from { background: #fff3cd; } to { background: #f9f9f9; } }
+        .notification { position: fixed; top: 20px; right: 20px; background: #323232; color: white; padding: 15px 20px; border-radius: 4px; animation: slideIn 0.3s; z-index: 1000; }
+        @keyframes slideIn { from { transform: translateX(400px); } to { transform: translateX(0); } }
+        .hidden { display: none; }
+        #deliveries { margin-top: 10px; padding: 10px; background: #f0f0f0; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 Admin Panel - Real-time Test</h1>
+        
+        <div class="status" id="status">⏳ Ready to login</div>
+
+        <div class="section" id="loginSection">
+            <h2>🔐 Login</h2>
+            <input type="email" id="email" placeholder="Email" value="admin@fastfood.uz">
+            <input type="password" id="password" placeholder="Password" value="admin123">
+            <button id="loginBtn">Login</button>
+        </div>
+
+        <div class="section hidden" id="ordersSection">
+            <h2>📦 Orders (Real-time)</h2>
+            <button id="refreshOrdersBtn">Refresh Orders</button>
+            <button id="loadDeliveriesBtn" class="success">Load Deliveries</button>
+            <div id="deliveries" class="hidden"></div>
+            <div class="orders" id="orders"></div>
+        </div>
+
+        <div class="section hidden" id="foodSection">
+            <h2>🍔 Create Food</h2>
+            <input type="file" id="foodImage" accept="image/*" style="margin-bottom: 10px;">
+            <button id="uploadImageBtn" class="secondary">Upload Image</button>
+            <div id="imagePreview" style="margin: 10px 0; display: none;">
+                <img id="previewImg" style="max-width: 200px; border-radius: 8px;">
+                <p id="imageUrl" style="font-size: 12px; color: #666;"></p>
+            </div>
+            <input type="text" id="foodName" placeholder="Food Name (Uz)" value="Test Burger">
+            <input type="number" id="foodPrice" placeholder="Price" value="35000">
+            <input type="number" id="prepTime" placeholder="Preparation Time (min)" value="15">
+            <button id="createFoodBtn">Create Food</button>
+        </div>
+    </div>
+
+    <script>
+        let token = localStorage.getItem('admin_token');
+        let socket = null;
+
+        const statusEl = document.getElementById('status');
+        const loginSection = document.getElementById('loginSection');
+        const ordersSection = document.getElementById('ordersSection');
+        const foodSection = document.getElementById('foodSection');
+
+        function showNotification(message) {
+            const notif = document.createElement('div');
+            notif.className = 'notification';
+            notif.textContent = message;
+            document.body.appendChild(notif);
+            setTimeout(() => notif.remove(), 3000);
+        }
+
+        function updateStatus(message, type = 'info') {
+            statusEl.textContent = message;
+            statusEl.className = 'status ' + type;
+        }
+
+        document.getElementById('loginBtn').addEventListener('click', async function() {
+            const btn = this;
+            btn.disabled = true;
+            btn.textContent = 'Logging in...';
+
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch('http://localhost:3000/api/v1/auth/admin-login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    token = data.data.accessToken;
+                    localStorage.setItem('admin_token', token);
+                    showNotification('✅ Login successful!');
+                    updateStatus('✅ Logged in as ' + data.data.admin.email, 'connected');
+                    
+                    loginSection.classList.add('hidden');
+                    ordersSection.classList.remove('hidden');
+                    foodSection.classList.remove('hidden');
+                    
+                    connectSocket();
+                    loadOrders();
+                } else {
+                    showNotification('❌ Login failed: ' + data.message);
+                    updateStatus('❌ Login failed', 'error');
+                    btn.disabled = false;
+                    btn.textContent = 'Login';
+                }
+            } catch (error) {
+                showNotification('❌ Error: ' + error.message);
+                updateStatus('❌ Error', 'error');
+                btn.disabled = false;
+                btn.textContent = 'Login';
+            }
+        });
+
+        function connectSocket() {
+            if (!token) return;
+
+            socket = io('http://localhost:3000', {
+                auth: { token }
+            });
+
+            socket.on('connect', () => {
+                updateStatus('🔌 Socket.IO connected', 'connected');
+                showNotification('🔌 Real-time connection established');
+            });
+
+            socket.on('disconnect', () => {
+                updateStatus('❌ Socket.IO disconnected', 'error');
+            });
+
+            socket.on('order:created', (order) => {
+                showNotification('🆕 New order: ' + order.orderNumber);
+                addOrderToList(order, true);
+            });
+
+            socket.on('order:status:changed', (order) => {
+                showNotification('🔄 Order ' + order.orderNumber + ' status: ' + order.status);
+                updateOrderInList(order);
+            });
+
+            socket.on('delivery:assigned', (order) => {
+                showNotification('🚚 Delivery assigned to order ' + order.orderNumber);
+            });
+        }
+
+        document.getElementById('refreshOrdersBtn').addEventListener('click', loadOrders);
+
+        async function loadOrders() {
+            if (!token) return;
+
+            try {
+                const response = await fetch('http://localhost:3000/api/v1/admin/orders', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    const ordersDiv = document.getElementById('orders');
+                    ordersDiv.innerHTML = '';
+                    data.data.forEach(order => addOrderToList(order));
+                    showNotification('✅ Orders loaded: ' + data.data.length);
+                }
+            } catch (error) {
+                showNotification('❌ Error: ' + error.message);
+            }
+        }
+
+        document.getElementById('loadDeliveriesBtn').addEventListener('click', async function() {
+            if (!token) return;
+
+            try {
+                const response = await fetch('http://localhost:3000/api/v1/admin/deliveries', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    const deliveriesDiv = document.getElementById('deliveries');
+                    deliveriesDiv.classList.remove('hidden');
+                    deliveriesDiv.innerHTML = '<strong>📱 Available Deliveries:</strong><br>';
+                    
+                    if (data.data.length === 0) {
+                        deliveriesDiv.innerHTML += '<small>No delivery persons registered yet</small>';
+                    } else {
+                        data.data.forEach(delivery => {
+                            deliveriesDiv.innerHTML += `
+                                <div style="padding: 5px; margin: 5px 0; background: white; border-radius: 4px;">
+                                    👤 ${delivery.firstName} ${delivery.lastName || ''} - 
+                                    📞 <strong>${delivery.phoneNumber}</strong>
+                                    ${delivery.telegramId ? '✅' : '❌'}
+                                </div>
+                            `;
+                        });
+                    }
+                    showNotification('✅ Deliveries loaded: ' + data.data.length);
+                }
+            } catch (error) {
+                showNotification('❌ Error: ' + error.message);
+            }
+        });
+
+        function addOrderToList(order, isNew = false) {
+            const ordersDiv = document.getElementById('orders');
+            const orderCard = document.createElement('div');
+            orderCard.className = 'order-card' + (isNew ? ' new' : '');
+            orderCard.id = 'order-' + order.id;
+            
+            const assignDeliveryBtn = order.status === 'ready' && !order.deliveryId
+                ? `<br><input type="tel" id="phone-${order.id}" placeholder="+998901234567" style="margin-top: 10px; width: 150px;">
+                   <button class="success" data-order-id="${order.id}" data-action="assign">Assign Delivery</button>`
+                : '';
+            
+            orderCard.innerHTML = `
+                <strong>📋 ${order.orderNumber}</strong> - 
+                <span style="color: ${getStatusColor(order.status)}">${order.status}</span><br>
+                💰 ${order.totalPrice} so'm | 📍 ${order.deliveryAddress}<br>
+                <small>⏰ ${new Date(order.createdAt).toLocaleString('uz-UZ')}</small><br>
+                <button data-order-id="${order.id}" data-status="confirmed" class="success">Confirm</button>
+                <button data-order-id="${order.id}" data-status="preparing">Preparing</button>
+                <button data-order-id="${order.id}" data-status="ready">Ready</button>
+                <button data-order-id="${order.id}" data-status="cancelled" class="danger">Cancel</button>
+                ${assignDeliveryBtn}
+            `;
+            ordersDiv.insertBefore(orderCard, ordersDiv.firstChild);
+            
+            // Add event listeners to buttons
+            orderCard.querySelectorAll('button[data-status]').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const orderId = this.getAttribute('data-order-id');
+                    const status = this.getAttribute('data-status');
+                    updateOrderStatus(orderId, status);
+                });
+            });
+            
+            orderCard.querySelectorAll('button[data-action="assign"]').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const orderId = this.getAttribute('data-order-id');
+                    assignDeliveryByPhone(orderId);
+                });
+            });
+        }
+
+        function updateOrderInList(order) {
+            const orderCard = document.getElementById('order-' + order.id);
+            if (orderCard) {
+                // Remove old card and add updated one
+                orderCard.remove();
+                addOrderToList(order, true);
+            } else {
+                // New order, just add it
+                addOrderToList(order, true);
+            }
+        }
+
+        async function updateOrderStatus(orderId, status) {
+            if (!token) return;
+
+            try {
+                const response = await fetch(`http://localhost:3000/api/v1/admin/orders/${orderId}/status`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ status })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('✅ Order status updated to: ' + status);
+                } else {
+                    showNotification('❌ Failed to update status');
+                }
+            } catch (error) {
+                showNotification('❌ Error: ' + error.message);
+            }
+        }
+
+        async function assignDeliveryByPhone(orderId) {
+            if (!token) return;
+
+            const phoneInput = document.getElementById('phone-' + orderId);
+            const phoneNumber = phoneInput.value.trim();
+
+            if (!phoneNumber || !phoneNumber.match(/^\+998\d{9}$/)) {
+                showNotification('❌ Invalid phone number format. Use: +998XXXXXXXXX');
+                return;
+            }
+
+            try {
+                const response = await fetch(`http://localhost:3000/api/v1/admin/orders/${orderId}/assign-delivery`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ phoneNumber })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification(`✅ Delivery assigned to ${data.data.delivery.firstName} (${phoneNumber})`);
+                    loadOrders();
+                } else {
+                    showNotification('❌ ' + data.message);
+                }
+            } catch (error) {
+                showNotification('❌ Error: ' + error.message);
+            }
+        }
+
+        document.getElementById('createFoodBtn').addEventListener('click', async function() {
+            if (!token) return;
+
+            const imageUrl = document.getElementById('imageUrl').textContent;
+
+            const foodData = {
+                categoryId: 2,
+                nameUz: document.getElementById('foodName').value,
+                nameRu: document.getElementById('foodName').value,
+                nameEn: document.getElementById('foodName').value,
+                price: document.getElementById('foodPrice').value,
+                preparationTime: parseInt(document.getElementById('prepTime').value) || 15,
+                image: imageUrl || null
+            };
+
+            try {
+                const response = await fetch('http://localhost:3000/api/v1/admin/foods', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(foodData)
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('✅ Food created: ' + data.data.nameUz);
+                    // Clear form
+                    document.getElementById('foodName').value = '';
+                    document.getElementById('foodPrice').value = '';
+                    document.getElementById('prepTime').value = '15';
+                    document.getElementById('foodImage').value = '';
+                    document.getElementById('imagePreview').style.display = 'none';
+                } else {
+                    showNotification('❌ Failed to create food');
+                }
+            } catch (error) {
+                showNotification('❌ Error: ' + error.message);
+            }
+        });
+
+        document.getElementById('uploadImageBtn').addEventListener('click', async function() {
+            if (!token) {
+                showNotification('❌ Please login first');
+                return;
+            }
+
+            const fileInput = document.getElementById('foodImage');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                showNotification('❌ Please select an image');
+                return;
+            }
+
+            console.log('Uploading file:', file.name, file.type, file.size);
+
+            const btn = this;
+            btn.disabled = true;
+            btn.textContent = 'Uploading...';
+
+            const formData = new FormData();
+            formData.append('image', file);
+
+            try {
+                console.log('Sending request to /api/v1/upload/image');
+                const response = await fetch('http://localhost:3000/api/v1/upload/image', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + token
+                    },
+                    body: formData
+                });
+
+                console.log('Response status:', response.status);
+                const data = await response.json();
+                console.log('Response data:', data);
+                
+                if (data.success) {
+                    showNotification('✅ Image uploaded!');
+                    document.getElementById('imagePreview').style.display = 'block';
+                    document.getElementById('previewImg').src = data.data.url;
+                    document.getElementById('imageUrl').textContent = data.data.url;
+                } else {
+                    showNotification('❌ Failed: ' + (data.message || 'Unknown error'));
+                    console.error('Upload failed:', data);
+                }
+            } catch (error) {
+                showNotification('❌ Error: ' + error.message);
+                console.error('Upload error:', error);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Upload Image';
+            }
+        });
+
+        function getStatusColor(status) {
+            const colors = {
+                pending: '#ff9800',
+                confirmed: '#2196F3',
+                preparing: '#9c27b0',
+                ready: '#4CAF50',
+                delivering: '#00bcd4',
+                delivered: '#4CAF50',
+                cancelled: '#f44336'
+            };
+            return colors[status] || '#666';
+        }
+
+        // Auto-connect if token exists
+        if (token) {
+            updateStatus('✅ Token found, connecting...', 'connected');
+            loginSection.classList.add('hidden');
+            ordersSection.classList.remove('hidden');
+            foodSection.classList.remove('hidden');
+            connectSocket();
+            loadOrders();
+        }
+    </script>
+</body>
+</html>
